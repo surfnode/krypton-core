@@ -1,13 +1,15 @@
 import sys
 import os
+import subprocess
 import requests
+import webbrowser
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
     QLineEdit, QPushButton, QLabel, QProgressBar, 
     QListWidget, QComboBox, QTextEdit, QMessageBox,
     QTabWidget, QListWidgetItem
 )
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import QUrl
 
@@ -172,15 +174,20 @@ class KryptonCore(QWidget):
         self.btn_refresh = QPushButton("Refresh List")
         self.btn_refresh.clicked.connect(self.refresh_local_models)
         
-        self.btn_open_folder = QPushButton("Open Folder in Dolphin")
+        self.btn_open_folder = QPushButton("Open Folder")
         self.btn_open_folder.clicked.connect(self.open_cache_folder)
 
-        self.btn_delete = QPushButton("Delete Selected Model")
+        self.btn_launch = QPushButton("Launch Server (CLI & Web)")
+        self.btn_launch.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        self.btn_launch.clicked.connect(self.launch_local_model)
+
+        self.btn_delete = QPushButton("Delete Model")
         self.btn_delete.setStyleSheet("color: #ff5555;")
         self.btn_delete.clicked.connect(self.delete_local_model)
 
         btn_layout.addWidget(self.btn_refresh)
         btn_layout.addWidget(self.btn_open_folder)
+        btn_layout.addWidget(self.btn_launch)
         btn_layout.addWidget(self.btn_delete)
         layout.addLayout(btn_layout)
 
@@ -216,6 +223,27 @@ class KryptonCore(QWidget):
     def open_cache_folder(self):
         os.makedirs(TARGET_DIR, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(TARGET_DIR))
+
+    def launch_local_model(self):
+        selected_item = self.local_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "Selection Required", "Please select a model to launch.")
+            return
+
+        filename = selected_item.data(Qt.ItemDataRole.UserRole)
+        filepath = os.path.join(TARGET_DIR, filename)
+
+        try:
+            # 1. Spawn terminal and run llama-server
+            cmd = f"llama-server -m '{filepath}' --port 8080"
+            shell_command = f"bash -c \"{cmd}; echo ''; echo 'Press Enter to exit...'; read\""
+            subprocess.Popen(["x-terminal-emulator", "-e", shell_command])
+            
+            # 2. Wait 1.5 seconds for the server to bind to port 8080, then launch the browser
+            QTimer.singleShot(1500, lambda: webbrowser.open("http://127.0.0.1:8080"))
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Launch Error", f"Failed to launch terminal: {str(e)}")
 
     def delete_local_model(self):
         selected_item = self.local_list.currentItem()
