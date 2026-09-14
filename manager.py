@@ -4,9 +4,12 @@ import requests
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
     QLineEdit, QPushButton, QLabel, QProgressBar, 
-    QListWidget, QComboBox, QTextEdit, QMessageBox
+    QListWidget, QComboBox, QTextEdit, QMessageBox,
+    QTabWidget, QListWidgetItem
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QUrl
 
 TARGET_DIR = os.path.expanduser("~/.cache/llama.cpp")
 
@@ -102,13 +105,29 @@ class KryptonCore(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("Krypton Core — Model Engine")
-        self.resize(650, 520)
+        self.resize(700, 560)
+        main_layout = QVBoxLayout()
+
+        self.tabs = QTabWidget()
+        self.tab_discover = QWidget()
+        self.tab_local = QWidget()
+
+        self.setup_discover_tab()
+        self.setup_local_tab()
+
+        self.tabs.addTab(self.tab_discover, "Discover & Download")
+        self.tabs.addTab(self.tab_local, "Local Models & Storage")
+        self.tabs.currentChanged.connect(self.on_tab_switched)
+
+        main_layout.addWidget(self.tabs)
+        self.setLayout(main_layout)
+
+    def setup_discover_tab(self):
         layout = QVBoxLayout()
 
-        # Search Bar
         search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search Hugging Face (e.g. qwen abliterated, mistral nemo)...")
+        self.search_input.setPlaceholderText("Search Hugging Face (e.g. qwen, mistral, abliterated)...")
         self.search_input.returnPressed.connect(self.trigger_search)
         self.btn_search = QPushButton("Search")
         self.btn_search.clicked.connect(self.trigger_search)
@@ -116,33 +135,112 @@ class KryptonCore(QWidget):
         search_layout.addWidget(self.btn_search)
         layout.addLayout(search_layout)
 
-        # Repositories List
         layout.addWidget(QLabel("<b>Discovered GGUF Repositories:</b>"))
         self.repo_list = QListWidget()
         self.repo_list.itemClicked.connect(self.fetch_repo_files)
         layout.addWidget(self.repo_list)
 
-        # Quant Picker
         layout.addWidget(QLabel("<b>Available Quantizations:</b>"))
         self.file_combo = QComboBox()
         layout.addWidget(self.file_combo)
 
-        # Download Action
         self.btn_download = QPushButton("Download Selected Quant to Cache")
         self.btn_download.clicked.connect(self.start_download)
         layout.addWidget(self.btn_download)
 
-        # Progress & Logs
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(90)
+        self.log_output.setMaximumHeight(80)
         layout.addWidget(self.log_output)
 
-        self.setLayout(layout)
+        self.tab_discover.setLayout(layout)
+
+    def setup_local_tab(self):
+        layout = QVBoxLayout()
+
+        self.storage_label = QLabel("<b>Scanning local cache...</b>")
+        layout.addWidget(self.storage_label)
+
+        self.local_list = QListWidget()
+        layout.addWidget(self.local_list)
+
+        btn_layout = QHBoxLayout()
+        self.btn_refresh = QPushButton("Refresh List")
+        self.btn_refresh.clicked.connect(self.refresh_local_models)
+        
+        self.btn_open_folder = QPushButton("Open Folder in Dolphin")
+        self.btn_open_folder.clicked.connect(self.open_cache_folder)
+
+        self.btn_delete = QPushButton("Delete Selected Model")
+        self.btn_delete.setStyleSheet("color: #ff5555;")
+        self.btn_delete.clicked.connect(self.delete_local_model)
+
+        btn_layout.addWidget(self.btn_refresh)
+        btn_layout.addWidget(self.btn_open_folder)
+        btn_layout.addWidget(self.btn_delete)
+        layout.addLayout(btn_layout)
+
+        self.tab_local.setLayout(layout)
+
+    def on_tab_switched(self, index):
+        if index == 1:
+            self.refresh_local_models()
+
+    def refresh_local_models(self):
+        self.local_list.clear()
+        if not os.path.exists(TARGET_DIR):
+            self.storage_label.setText("No models cached yet.")
+            return
+
+        total_size = 0
+        count = 0
+        for f in sorted(os.listdir(TARGET_DIR)):
+            if f.endswith(".gguf"):
+                f_path = os.path.join(TARGET_DIR, f)
+                size_bytes = os.path.getsize(f_path)
+                total_size += size_bytes
+                size_gb = size_bytes / (1024 ** 3)
+                count += 1
+                
+                item = QListWidgetItem(f"{f}  —  [{size_gb:.2f} GB]")
+                item.setData(Qt.ItemDataRole.UserRole, f)
+                self.local_list.addItem(item)
+
+        total_gb = total_size / (1024 ** 3)
+        self.storage_label.setText(f"<b>Installed Models:</b> {count} | <b>Total Storage Used:</b> {total_gb:.2f} GB")
+
+    def open_cache_folder(self):
+        os.makedirs(TARGET_DIR, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(TARGET_DIR))
+
+    def delete_local_model(self):
+        selected_item = self.local_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "Selection Required", "Please select a model to delete.")
+            return
+
+        filename = selected_item.data(Qt.ItemDataRole.UserRole)
+        filepath = os.path.join(TARGET_DIR, filename)
+
+        reply = QMessageBox.question(
+            self, 
+            "Confirm Deletion", 
+            f"Are you sure you want to permanently delete:\n\n{filename}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                os.remove(filepath)
+                self.refresh_local_models()
+                QMessageBox.information(self, "Deleted", f"Deleted {filename} successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete model: {str(e)}")
 
     def trigger_search(self):
         query = self.search_input.text().strip()
@@ -169,7 +267,7 @@ class KryptonCore(QWidget):
     def fetch_repo_files(self, item):
         repo_id = item.text()
         self.file_combo.clear()
-        self.log_output.append(f"Fetching quantization files for {repo_id}...")
+        self.log_output.append(f"Fetching quants for {repo_id}...")
         
         self.file_worker = FileListWorker(repo_id)
         self.file_worker.files_ready.connect(self.populate_files)
